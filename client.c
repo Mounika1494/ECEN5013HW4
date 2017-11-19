@@ -1,37 +1,33 @@
-/*
-Send a file over a socket.
-
-Interface:
-
-    ./executable [<input_path> [<sever_hostname> [<port>]]]
-
-Defaults:
-
-- input_path: input.tmp
-- server_hostname: 127.0.0.1
-- port: 12345
-*/
+/***********************************************************************************
+*client.c
+*@brief to communicate to the BBG and change the led attributes over sockets(TCP)
+*
+********************************************************************************/
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <arpa/inet.h>
 #include <fcntl.h>
-#include <netdb.h> /* getprotobyname */
+#include <netdb.h> 
 #include <netinet/in.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
-typedef enum {SETLEDSTATE,SETPERIOD,SETDUTYCYCLE,GETLEDSTATE,GETPERIOD,GETDUTYCYCLE}command_t;
+//Commands
+typedef enum {SETLEDSTATE,SETPERIOD,SETDUTYCYCLE,GETLEDSTATE,GETPERIOD,GETDUTYCYCLE,GETALL}command_t;
+//return type
 typedef enum {SUCCESS,ERROR}return_type_t;
 
+//led data
 typedef struct {
   uint16_t period;
   uint8_t dutycycle;
   char ledstate[7];
 }data_t;
 
+//ipc command to send over sockets
 typedef struct
 {
   command_t command;
@@ -98,6 +94,7 @@ int main(int argc, char **argv) {
         printf("GETLEDSTATE  :3\n");
         printf("GETPERIOD    :4\n");
         printf("GETDUTYCYCLE :5\n");
+        printf("GETALL       :6\n");
         printf("Select the number\n");
         scanf("%s",&option);
         printf("option selected is %d",option);
