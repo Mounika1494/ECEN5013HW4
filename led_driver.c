@@ -1,3 +1,24 @@
+/**********************************************************************************************************
+* Copyright (C) 2017 by Mounika Reddy Edula
+*
+*Redistribution,modification or use of this software in source or binary fors is permitted as long 
+*as the files maintain this copyright.Mounika Reddy Edula is not liable for any misuse of this material
+*
+*********************************************************************************************************/
+/**
+*@file led_driver.c
+*@brief This is an led driver from communicating with char driver which can read and write values
+* related to the led driver like period dutycycle and led state
+* period (2,100000)
+* dutycycle (10,100)
+* ledstate(ledon ledoff)
+*
+*@author Mounika Reddy Edula
+*@date November 19 2017
+*@version 1.0
+*
+*/
+
 #include<stdio.h>
 #include <unistd.h>
 #include <stdint.h>
@@ -12,21 +33,26 @@
 #include <sys/stat.h>
 #include <sys/socket.h>
 
+//Commands 
 typedef enum {SETLEDSTATE,SETPERIOD,SETDUTYCYCLE,GETLEDSTATE,GETPERIOD,GETDUTYCYCLE,GETALL}command_t;
+//return type
 typedef enum {SUCCESS,ERROR}return_type_t;
 
+//led data
 typedef struct {
        uint16_t period;
        uint8_t dutycycle;
        char ledstate[7];
 }data_t;
 
+//command structure for socket communication
 typedef struct
 {
   command_t command;
   data_t led_data;
 }ipc_command_t;
 
+//driver which can write values to the attributes of led driver
 return_type_t write_led_driver(command_t command,data_t data)
 {
        char* path = malloc(40);
@@ -123,6 +149,7 @@ return_type_t write_led_driver(command_t command,data_t data)
        
 }
 
+//read led data from char driver
 return_type_t read_led_driver(command_t command,data_t *data)
 {
        char* path = malloc(40);
@@ -226,6 +253,7 @@ int main(int argc,char **argv)
     int server_sockfd;
     socklen_t client_len;
     ssize_t read_return;
+    int ret;
     struct protoent *protoent;
     struct sockaddr_in client_address, server_address;
     unsigned short server_port = 12345u;
@@ -270,42 +298,41 @@ int main(int argc,char **argv)
                 exit(EXIT_FAILURE);
             }
             printf("recieved from client %d and %d\n",ipc_command.command,ipc_command.led_data.period);
+            /***write data to driver*/
             if(ipc_command.command <= 2)
-            write_led_driver(ipc_command.command,ipc_command.led_data);
-            if(ipc_command.command > 2)
-            {
-            read_led_driver(ipc_command.command,&ipc_command.led_data);
-            if (write(client_sockfd, &ipc_command, sizeof(ipc_command)) == -1) {
-                perror("write");
-                exit(EXIT_FAILURE);
-            }
-            }
+            ret = write_led_driver(ipc_command.command,ipc_command.led_data);
+            if(ret)
+            printf("Write failed\n");
+            /**get all**/
             if(ipc_command.command == 6)
             {
-                read_led_driver(GETLEDSTATE,&ipc_command.led_data);
-                read_led_driver(GETPERIOD,&ipc_command.led_data);
-                read_led_driver(GETDUTYCYCLE,&ipc_command.led_data);
+                ret = read_led_driver(GETLEDSTATE,&ipc_command.led_data);
+                if(ret)
+                printf("Read failed\n");
+                ret = read_led_driver(GETPERIOD,&ipc_command.led_data);
+                if(ret)
+                printf("Read failed\n");
+                ret = read_led_driver(GETDUTYCYCLE,&ipc_command.led_data);
+                if(ret)
+                printf("Read failed\n");
                 if (write(client_sockfd, &ipc_command, sizeof(ipc_command)) == -1) {
                 perror("write");
                 exit(EXIT_FAILURE);
             }
             }
+            /***single query ***/
+            if(ipc_command.command > 2)
+            {
+            ret = read_led_driver(ipc_command.command,&ipc_command.led_data);
+            if(ret)
+                printf("Read failed\n");
+            if (write(client_sockfd, &ipc_command, sizeof(ipc_command)) == -1) {
+                perror("write");
+                exit(EXIT_FAILURE);
+            }
+            }
+            
         }while(read_return >0);
         close(client_sockfd);
-        
-       /*data_t data;
-       data_t readdata;
-       read_led_driver(GETPERIOD,&readdata);
-       read_led_driver(GETDUTYCYCLE,&readdata);
-       read_led_driver(GETLEDSTATE,&readdata);
-       printf("period is %d\n",readdata.period);
-       printf("dutycycle is %d\n",readdata.dutycycle);
-       printf("led state is %s\n",readdata.ledstate);
-       data.period = 500;
-       write_led_driver(SETPERIOD,data);
-       data.dutycycle = 30;
-       write_led_driver(SETDUTYCYCLE,data);
-       strcpy(data.ledstate,"led on");
-       write_led_driver(SETLEDSTATE,data);*/
     }
 }
