@@ -7,12 +7,12 @@
 
 #include <arpa/inet.h>
 #include <fcntl.h>
-#include <netdb.h> /* getprotobyname */
+#include <netdb.h> 
 #include <netinet/in.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
 
-typedef enum {SETLEDSTATE,SETPERIOD,SETDUTYCYCLE,GETLEDSTATE,GETPERIOD,GETDUTYCYCLE}command_t;
+typedef enum {SETLEDSTATE,SETPERIOD,SETDUTYCYCLE,GETLEDSTATE,GETPERIOD,GETDUTYCYCLE,GETALL}command_t;
 typedef enum {SUCCESS,ERROR}return_type_t;
 
 typedef struct {
@@ -30,7 +30,7 @@ typedef struct
 return_type_t write_led_driver(command_t command,data_t data)
 {
        char* path = malloc(40);
-       strcpy(path,"/sys/ebb/led53/");
+       strcpy(path,"/sys/ecen5013/led53/");
        FILE* fp = NULL;
        char* buf = malloc(20);
        switch(command)
@@ -126,7 +126,7 @@ return_type_t write_led_driver(command_t command,data_t data)
 return_type_t read_led_driver(command_t command,data_t *data)
 {
        char* path = malloc(40);
-       strcpy(path,"/sys/ebb/led53/");
+       strcpy(path,"/sys/ecen5013/led53/");
        FILE* fp = NULL;
        char* buf = malloc(20);
        switch(command)
@@ -230,10 +230,6 @@ int main(int argc,char **argv)
     struct sockaddr_in client_address, server_address;
     unsigned short server_port = 12345u;
 
-    if (argc == 1) {
-            server_port = strtol(argv[1], NULL, 10);
-        }
-
     /* Create a socket and listen to it.. */
     protoent = getprotobyname(protoname);
     if (protoent == NULL) {
@@ -284,9 +280,20 @@ int main(int argc,char **argv)
                 exit(EXIT_FAILURE);
             }
             }
+            if(ipc_command.command == 6)
+            {
+                read_led_driver(GETLEDSTATE,&ipc_command.led_data);
+                read_led_driver(GETPERIOD,&ipc_command.led_data);
+                read_led_driver(GETDUTYCYCLE,&ipc_command.led_data);
+                if (write(client_sockfd, &ipc_command, sizeof(ipc_command)) == -1) {
+                perror("write");
+                exit(EXIT_FAILURE);
+            }
+            }
         }while(read_return >0);
         close(client_sockfd);
-     /*  data_t data;
+        
+       /*data_t data;
        data_t readdata;
        read_led_driver(GETPERIOD,&readdata);
        read_led_driver(GETDUTYCYCLE,&readdata);
