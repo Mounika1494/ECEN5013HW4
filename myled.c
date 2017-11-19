@@ -1,200 +1,165 @@
-/*   myled.c
+/* myled.c
  * @author Mounika Reddy Edu;a
- * @date   19 April 2015
- * @brief  A kernel module for controlling a simple LED (or any signal) that is connected to
- * a GPIO. It is threaded in order that it can flash the LED.
+ * @date   11 November 2017
+ * @brief  A kernel module for controlling on board LED parameters like
+ * period/rate of flashing,dutycycle of flashing,state of led
  * The sysfs entry appears at /sys/ebb/led53
- * 
+ *
+ * Credits: This homework is done with refernce provided in the HW
  * Reference  - @see http://www.derekmolloy.ie/
 */
 
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
-#include <linux/gpio.h>       // Required for the GPIO functions
-#include <linux/kobject.h>    // Using kobjects for the sysfs bindings
-#include <linux/kthread.h>    // Using kthreads for the flashing functionality
-#include <linux/delay.h>      // Using this header for the msleep() function
+#include <linux/gpio.h>      
+#include <linux/kobject.h>    
+#include <linux/kthread.h>    
+#include <linux/delay.h>      
+#include <linux/timer.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Mounika Reddy Edula");
-MODULE_DESCRIPTION("A simple Linux LED driver LKM for the BBB");
+MODULE_DESCRIPTION("Linux LED driver parameters blink period(2ms,100s) dutycycle(10,100) led_state(ledon,ledoff,flash)");
 MODULE_VERSION("0.1");
 
-static unsigned int gpioLED = 53;           ///< Default GPIO for the LED is 49
-module_param(gpioLED, uint, S_IRUGO);       ///< Param desc. S_IRUGO can be read/not changed
-MODULE_PARM_DESC(gpioLED, " GPIO LED number (default=53)");     ///< parameter description
+static unsigned int gpioLED = 53;           // User led- 1 53
+module_param(gpioLED, uint, S_IRUGO);       // Param desc. S_IRUGO can be read/not changed
+MODULE_PARM_DESC(gpioLED, " GPIO LED number (default=53)");  
 
-static unsigned int blinkPeriod = 1000;     ///< The blink period in ms
-static unsigned int blinkDutyCycle = 50;
-module_param(blinkPeriod, uint, S_IRUGO);   ///< Param desc. S_IRUGO can be read/not changed
-MODULE_PARM_DESC(blinkPeriod, " LED blink period in ms (min=1, default=1000, max=10000)");
+//default values
+static unsigned int blinkPeriod = 1000;     // The blink period in 1s
+static unsigned int blinkDutyCycle = 50;    //duty cycle 50%
+module_param(blinkPeriod, uint, S_IRUGO);   // Param desc. S_IRUGO can be read/not changed
+MODULE_PARM_DESC(blinkPeriod, " LED blink period in ms (min=1, default=1000, max=100000)");
 
-static char ledName[7] = "ledXXX";          ///< Null terminated default string -- just in case
-static bool ledOn = 0;                     ///< Is the LED on or off? Used for flashing
-enum led_state_t { LEDON,LEDOFF };
-static volatile enum led_state_t led_state = LEDON; 
+static char ledName[7] = "ledXXX";          
+static bool ledOn = 0;                     //ledOn for storing the state of the led
+enum led_state_t { LEDON,LEDOFF,FLASH };   //modes of led
+static volatile enum led_state_t led_state = LEDON;  //default mode
+static struct timer_list my_timer; //timer for perodic call back
 
-/** @brief A callback function to display the LED mode
- *  @param kobj represents a kernel object device that appears in the sysfs filesystem
- *  @param attr the pointer to the kobj_attribute struct
- *  @param buf the buffer to which to write the number of presses
- *  @return return the number of characters of the mode string successfully displayed
- */
+/* the attribute_show is callback for if the file is read in user space*/
 static ssize_t state_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf){
-   switch(led_state){
-      case LEDOFF:   return sprintf(buf, "led off\n");       // Display the state -- simplistic approach
-      case LEDON:    return sprintf(buf, "led on\n");
+   switch(ledOn){
+      case 0:   return sprintf(buf, "ledoff\n");       // Display the state of led
+      case 1:    return sprintf(buf, "ledon\n");
       default:    return sprintf(buf, "LKM Error\n"); // Cannot get here
    }
 }
 
-/** @brief A callback function to store the LED mode using the enum above */
+/* the attribute_store is callback for if the file is written in user space*/
 static ssize_t state_store(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t count){
    // the count-1 is important as otherwise the \n is used in the comparison
-   if (strncmp(buf,"led off",count-1)==0) { led_state = LEDOFF; }   // strncmp() compare with fixed number chars
-   else if (strncmp(buf,"led on",count-1)==0) { led_state = LEDON; }
+   if (strncmp(buf,"ledoff",count-1)==0) { led_state = LEDOFF; }   // strncmp() compare with fixed number chars
+   else if (strncmp(buf,"ledon",count-1)==0) {led_state = LEDON; }
+   else if (strncmp(buf,"flash",count-1)==0) { led_state = FLASH; }
    return count;
 }
 
-/** @brief A callback function to display the LED period */
+/* the attribute_show is callback for if the file is read in user space*/
 static ssize_t period_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf){
    return sprintf(buf, "%d\n", blinkPeriod);
 }
 
-/** @brief A callback function to store the LED period value */
+/* the attribute_store is callback for if the file is written in user space*/
 static ssize_t period_store(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t count){
-   unsigned int period;                     // Using a variable to validate the data sent
-   sscanf(buf, "%du", &period);             // Read in the period as an unsigned int
-   if ((period>1)&&(period<=10000)){        // Must be 2ms or greater, 10secs or less
-      blinkPeriod = period;                 // Within range, assign to blinkPeriod variable
+   unsigned int period;                     
+   sscanf(buf, "%du", &period);             
+   if ((period>1)&&(period<=100000)){        // Must be 2ms or greater, 100secs or less
+      blinkPeriod = period;                 
    }
    return period;
 }
 
-/** @brief A callback function to display the LED period */
+/* the attribute_show is callback for if the file is read in user space*/
 static ssize_t dutycycle_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf){
    return sprintf(buf, "%d\n", blinkDutyCycle);
 }
 
-/** @brief A callback function to store the LED period value */
+/* the attribute_store is callback for if the file is written in user space*/
 static ssize_t dutycycle_store(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t count){
-   unsigned int dutycycle;                     // Using a variable to validate the data sent
-   sscanf(buf, "%du", &dutycycle);             // Read in the period as an unsigned int
+   unsigned int dutycycle;                     
+   sscanf(buf, "%du", &dutycycle);             
    if ((dutycycle>10)&&(dutycycle<=100)){        // Must be 10% or greater, 100% or less
-       blinkDutyCycle = dutycycle;                 // Within range, assign to blinkPeriod variable
+       blinkDutyCycle = dutycycle;                 
    }
    return dutycycle;
 }
 
-/** Use these helper macros to define the name and access levels of the kobj_attributes
- *  The kobj_attribute has an attribute attr (name and mode), show and store function pointers
- *  The period variable is associated with the blinkPeriod variable and it is to be exposed
- *  with mode 0666 using the period_show and period_store functions above
+/*
+ *  Attributes with 0644 so that only root user is given the permissions to set the parameters
  */
-static struct kobj_attribute period_attr = __ATTR(blinkPeriod, 0444, period_show, period_store);
-static struct kobj_attribute dutycycle_attr = __ATTR(blinkDutyCycle, 0444, dutycycle_show, dutycycle_store);
-static struct kobj_attribute state_attr = __ATTR(led_state,0444,state_show,state_store);
+static struct kobj_attribute period_attr = __ATTR(blinkPeriod, 0644, period_show, period_store);
+static struct kobj_attribute dutycycle_attr = __ATTR(blinkDutyCycle, 0644, dutycycle_show, dutycycle_store);
+static struct kobj_attribute state_attr = __ATTR(led_state,0644,state_show,state_store);
 
-/** The ebb_attrs[] is an array of attributes that is used to create the attribute group below.
- *  The attr property of the kobj_attribute is used to extract the attribute struct
- */
-static struct attribute *ebb_attrs[] = {
+
+static struct attribute *led_attrs[] = {
    &period_attr.attr,                       // The period at which the LED flashes
-   &dutycycle_attr.attr,
-   &state_attr.attr,
+   &dutycycle_attr.attr,                    //dutycycle
+   &state_attr.attr,                        //led state attribute
    NULL,
 };
 
-/** The attribute group uses the attribute array and a name, which is exposed on sysfs -- in this
- *  case it is gpio49, which is automatically defined in the ebbLED_init() function below
- *  using the custom kernel parameter that can be passed when the module is loaded.
- */
+
 static struct attribute_group attr_group = {
    .name  = ledName,                        // The name is generated in ebbLED_init()
-   .attrs = ebb_attrs,                      // The attributes array defined just above
+   .attrs = led_attrs,                      // The attributes array defined just above
 };
 
 static struct kobject *ebb_kobj;            /// The pointer to the kobject
-static struct task_struct *task;            /// The pointer to the thread task
 
-/** @brief The LED Flasher main kthread loop
- *
- *  @param arg A void pointer used in order to pass data to the thread
- *  @return returns 0 if successful
- */
-static int flash(void *arg){
-   printk(KERN_INFO "EBB LED: Thread has started running \n");
-   while(!kthread_should_stop()){           // Returns true when kthread_stop() is called
-      set_current_state(TASK_RUNNING);
-      ledOn = !ledOn;      // Invert the LED state
-      if(ledOn == true)
-      led_state = LEDON;
-      if(ledOn == false)
-      led_state = LEDOFF;
-      gpio_set_value(gpioLED, ledOn);       // Use the LED state to light/turn off the LED
-      set_current_state(TASK_INTERRUPTIBLE);
-      msleep((blinkPeriod*blinkDutyCycle)/100);                // millisecond sleep for half of the period
-   }
-   printk(KERN_INFO "EBB LED: Thread has run to completion \n");
-   return 0;
+/**timer callback for period*/
+void my_timer_callback(unsigned long data)
+{
+printk("timer expired\n");
+if(led_state == FLASH) ledOn = !ledOn;
+if(led_state == LEDON) ledOn = true;
+if(led_state == LEDOFF) ledOn = false;
+gpio_set_value(gpioLED,ledOn); 
+mod_timer(&my_timer, jiffies+msecs_to_jiffies((blinkPeriod*blinkDutyCycle)/100));
 }
 
-/** @brief The LKM initialization function
- *  The static keyword restricts the visibility of the function to within this C file. The __init
- *  macro means that for a built-in driver (not a LKM) the function is only used at initialization
- *  time and that it can be discarded and its memory freed up after that point. In this example this
- *  function sets up the GPIOs and the IRQ
- *  @return returns 0 if successful
- */
+/* @brief The LKM initialization function*/
 static int __init ebbLED_init(void){
    int result = 0;
 
-   printk(KERN_INFO "EBB LED: Initializing the EBB LED LKM\n");
-   sprintf(ledName, "led%d", gpioLED);      // Create the gpio115 name for /sys/ebb/led49
+   printk(KERN_INFO "LED: Initializing the LED driver\n");
+   sprintf(ledName, "led%d", gpioLED);      // Create the gpio115 name for /sys/ebb/led53
 
-   ebb_kobj = kobject_create_and_add("ebb", kernel_kobj->parent); // kernel_kobj points to /sys/kernel
+   ebb_kobj = kobject_create_and_add("ecen5013", kernel_kobj->parent); // kernel_kobj points to /sys/kernel
    if(!ebb_kobj){
-      printk(KERN_ALERT "EBB LED: failed to create kobject\n");
+      printk(KERN_ALERT "LED: failed to create kernel object\n");
       return -ENOMEM;
    }
-   // add the attributes to /sys/ebb/ -- for example, /sys/ebb/led49/ledOn
+   // add the attributes to /sys/ecen5013/ -- for example, /sys/ebb/led53/ledOn
    result = sysfs_create_group(ebb_kobj, &attr_group);
    if(result) {
-      printk(KERN_ALERT "EBB LED: failed to create sysfs group\n");
+      printk(KERN_ALERT "LED: failed to create sysfs group\n");
       kobject_put(ebb_kobj);                // clean up -- remove the kobject sysfs entry
       return result;
    }
    ledOn = true;
-   gpio_request(gpioLED, "sysfs");          // gpioLED is 49 by default, request it
-   gpio_direction_output(gpioLED, ledOn);   // Set the gpio to be in output mode and turn on
-   gpio_export(gpioLED, false);  // causes gpio49 to appear in /sys/class/gpio
-                                 // the second argument prevents the direction from being changed
+   gpio_request(gpioLED, "sysfs");          
+   gpio_direction_output(gpioLED, ledOn);   
+   gpio_export(gpioLED, false);  
 
-   task = kthread_run(flash, NULL, "LED_flash_thread");  // Start the LED flashing thread
-   if(IS_ERR(task)){                                     // Kthread name is LED_flash_thread
-      printk(KERN_ALERT "EBB LED: failed to create the task\n");
-      return PTR_ERR(task);
-   }
+   setup_timer(&my_timer,my_timer_callback,0);
+   mod_timer(&my_timer, jiffies+msecs_to_jiffies((blinkPeriod*blinkDutyCycle)/100));
    return result;
 }
 
-/** @brief The LKM cleanup function
- *  Similar to the initialization function, it is static. The __exit macro notifies that if this
- *  code is used for a built-in driver (not a LKM) that this function is not required.
- */
+/** @brief The module cleanup function*/
 static void __exit ebbLED_exit(void){
-   kthread_stop(task);                      // Stop the LED flashing thread
-   kobject_put(ebb_kobj);                   // clean up -- remove the kobject sysfs entry
-   gpio_set_value(gpioLED, 0);              // Turn the LED off, indicates device was unloaded
-   gpio_unexport(gpioLED);                  // Unexport the Button GPIO
-   gpio_free(gpioLED);                      // Free the LED GPIO
-   printk(KERN_INFO "EBB LED: Goodbye from the EBB LED LKM!\n");
+   kobject_put(ebb_kobj);                  
+   gpio_set_value(gpioLED, 0);              
+   gpio_unexport(gpioLED);                  
+   gpio_free(gpioLED);                    
+   del_timer(&my_timer);
+   printk(KERN_INFO "LED: Goodbye from the LED Driver!\n");
 }
 
-/// This next calls are  mandatory -- they identify the initialization function
-/// and the cleanup function (as above).
+//To indicate the entry and exit functions in the module
 module_init(ebbLED_init);
 module_exit(ebbLED_exit);
-
-
