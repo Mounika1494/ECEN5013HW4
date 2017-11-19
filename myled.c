@@ -108,58 +108,74 @@ static struct attribute_group attr_group = {
    .attrs = led_attrs,                      // The attributes array defined just above
 };
 
-static struct kobject *ebb_kobj;            /// The pointer to the kobject
+static struct kobject *led_kobj;            /// The pointer to the kobject
 
 /**timer callback for period*/
 void my_timer_callback(unsigned long data)
 {
-printk("timer expired\n");
-if(led_state == FLASH) ledOn = !ledOn;
-if(led_state == LEDON) ledOn = true;
-if(led_state == LEDOFF) ledOn = false;
-gpio_set_value(gpioLED,ledOn); 
-mod_timer(&my_timer, jiffies+msecs_to_jiffies((blinkPeriod*blinkDutyCycle)/100));
+   int ret;
+   printk("timer expired\n");
+   if(led_state == FLASH) ledOn = !ledOn;
+   if(led_state == LEDON) ledOn = true;
+   if(led_state == LEDOFF) ledOn = false;
+   gpio_set_value(gpioLED,ledOn); 
+   ret = mod_timer(&my_timer, jiffies+msecs_to_jiffies((blinkPeriod*blinkDutyCycle)/100));
+   if(ret)
+   printk("Error in mod timer\n");
 }
 
 /* @brief The LKM initialization function*/
-static int __init ebbLED_init(void){
+static int __init LED_init(void){
    int result = 0;
-
+   int ret;
    printk(KERN_INFO "LED: Initializing the LED driver\n");
    sprintf(ledName, "led%d", gpioLED);      // Create the gpio115 name for /sys/ebb/led53
 
-   ebb_kobj = kobject_create_and_add("ecen5013", kernel_kobj->parent); // kernel_kobj points to /sys/kernel
-   if(!ebb_kobj){
+   led_kobj = kobject_create_and_add("ecen5013", kernel_kobj->parent); // kernel_kobj points to /sys/kernel
+   if(!led_kobj){
       printk(KERN_ALERT "LED: failed to create kernel object\n");
       return -ENOMEM;
    }
    // add the attributes to /sys/ecen5013/ -- for example, /sys/ebb/led53/ledOn
-   result = sysfs_create_group(ebb_kobj, &attr_group);
+   result = sysfs_create_group(led_kobj, &attr_group);
    if(result) {
       printk(KERN_ALERT "LED: failed to create sysfs group\n");
-      kobject_put(ebb_kobj);                // clean up -- remove the kobject sysfs entry
+      kobject_put(led_kobj);                // clean up -- remove the kobject sysfs entry
       return result;
    }
    ledOn = true;
-   gpio_request(gpioLED, "sysfs");          
-   gpio_direction_output(gpioLED, ledOn);   
-   gpio_export(gpioLED, false);  
+   ret = gpio_request(gpioLED, "sysfs");   
+   if(ret)
+   printk("Gpio request failed\n");
+   ret = gpio_direction_output(gpioLED, ledOn); 
+   if(ret)
+   printk("Setting gpio direction failed\n");
+   ret = gpio_export(gpioLED, false);  
+   if(ret)
+   printk("exporting gpio failed\n");
 
    setup_timer(&my_timer,my_timer_callback,0);
-   mod_timer(&my_timer, jiffies+msecs_to_jiffies((blinkPeriod*blinkDutyCycle)/100));
+   ret = mod_timer(&my_timer, jiffies+msecs_to_jiffies((blinkPeriod*blinkDutyCycle)/100));
+   if(ret)
+   printk("Error in mod timer\n");
    return result;
 }
 
 /** @brief The module cleanup function*/
-static void __exit ebbLED_exit(void){
-   kobject_put(ebb_kobj);                  
+static void __exit LED_exit(void){
+   int ret;
+   kobject_put(led_kobj);                  
    gpio_set_value(gpioLED, 0);              
    gpio_unexport(gpioLED);                  
    gpio_free(gpioLED);                    
-   del_timer(&my_timer);
+   ret = del_timer(&my_timer);
+   if(ret)
+   {
+      printk("Timer is still in use\n");
+   }
    printk(KERN_INFO "LED: Goodbye from the LED Driver!\n");
 }
 
 //To indicate the entry and exit functions in the module
-module_init(ebbLED_init);
-module_exit(ebbLED_exit);
+module_init(LED_init);
+module_exit(LED_exit);
